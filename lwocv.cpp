@@ -8,7 +8,7 @@ cv::Mat calcImgGrad(const cv::Mat &img) {
     cv::cartToPolar(gx,gy, ret,ga);
     double vMax;
     cv::minMaxLoc(ret, NULL, &vMax, NULL,NULL);
-    ret=1.0-ret/vMax;
+    ret=1.0-ret/vMax;  // 因为都是返回cost，梯度越大，cost越小
     return ret;
 }
 
@@ -120,31 +120,32 @@ void calcLiveWireP(const cv::Mat &imgS, int dX, int dY, cv::Mat &iPX, cv::Mat &i
 
     SEntry  SQ, SR;
 
-    cv::Mat lE = cv::Mat::zeros(siz, CV_8S);
+    cv::Mat lE = cv::Mat::zeros(siz, CV_8S);  // 用于记载某个点是否被处理过，准确来说是某个索引值
     char*   plE= (char*)(lE.data);
     SEntry *pSList = new SEntry[LISTMAXLENGTH];
-    lNPixelsToProcess = ifMin(long(3.14*dRadius*dRadius + 0.5), long(sNX)*long(sNY));
+    lNPixelsToProcess = ifMin(long(3.14*dRadius*dRadius + 0.5), long(sNX)*long(sNY)); // 设定了一个搜索范围，不然全图搜索太大了
 
     // Initialize active list with zero cost seed pixel.
     SQ.sX       = sXSeed;
     SQ.sY       = sYSeed;
     //    SQ.lLinInd  = ifLinInd(sXSeed, sYSeed, sNY);
-    SQ.lLinInd  = ifLinInd(sXSeed, sYSeed, sNX);
-    SQ.flG      = 0.0;
-    pSList[lListInd++] = SQ;
+    SQ.lLinInd  = ifLinInd(sXSeed, sYSeed, sNX); // 不知道原来是个指针索引index
+    SQ.flG      = 0.0; // 储存cost
+    pSList[lListInd++] = SQ;  // 用后加，也就是先pSList[0] = SQ, 然后lListInd++
 
     // While there are still objects in the active list and pixel limit not reached
-    while ((lListInd) && (lNPixelsProcessed < lNPixelsToProcess)) {
+    while ((lListInd) && (lNPixelsProcessed < lNPixelsToProcess)) { //这是以初始种子点为中心动态规划到以半径为dRadius的圆面积内各位置的最短路径，
+		// 其中iPX和iPY储存最短路径的索引方向， 比如种子点到左上角，那左上角的iPX为1，iPY为1，也就是说从该点的右下角的位置过来的路径是最短的
         // ----------------------------------------------------------------
         // Determine pixel q in list with minimal cost and remove from
         // active list. Mark q as processed.
-        lInd = fFindMinG(pSList, lListInd);
+        lInd = fFindMinG(pSList, lListInd); // 找出pSList中cost值最小的位置
         SQ   = pSList[lInd];
         lListInd--;
-        pSList[lInd] = pSList[lListInd];
-        plE[SQ.lLinInd]  = 1;
+        pSList[lInd] = pSList[lListInd]; // 将最后一个元素赋给pSList中cost值最小的位置， 可是这里只有点击一次才会调用
+        plE[SQ.lLinInd]  = 1; // 表示这一个值已经处理过了
         // ----------------------------------------------------------------
-        // Determine neighbourhood of q and loop over it
+        // Determine neighbourhood of q and loop over it 3*3的窗口
         sXLowerLim = ifMax(      0, SQ.sX - 1);
         sXUpperLim = ifMin(sNX - 1, SQ.sX + 1);
         sYLowerLim = ifMax(      0, SQ.sY - 1);
@@ -154,25 +155,25 @@ void calcLiveWireP(const cv::Mat &imgS, int dX, int dY, cv::Mat &iPX, cv::Mat &i
                 // - - - - - - - - - - - - - - - - - - - - - - - - - - - -
                 // Skip if pixel was already processed
                 //                lLinInd = ifLinInd(sX, sY, sNY);
-                lLinInd = ifLinInd(sX, sY, sNX);
-                if (plE[lLinInd]) continue;
+                lLinInd = ifLinInd(sX, sY, sNX);  // 只是简单地计算指针的索引值
+                if (plE[lLinInd]) continue; // plE是一个与图像同样大小的标志位矩阵，如果某个像素位置置1了表明这一个位置已经被处理过了
                 // - - - - - - - - - - - - - - - - - - - - - - - - - - - -
                 // Compute the new accumulated cost to the neighbour pixel
-                if ((abs(sX - SQ.sX) + abs(sY - SQ.sY)) == 1) flWeight = 0.71; else flWeight = 1;
-                flThisG = SQ.flG + float(pdF[lLinInd])*flWeight;
+                if ((abs(sX - SQ.sX) + abs(sY - SQ.sY)) == 1) flWeight = 0.71; else flWeight = 1; // 对角线的邻域权值更大一丢丢，具体就是sqrt(2)的问题
+                flThisG = SQ.flG + float(pdF[lLinInd])*flWeight; // 原来pdf是cost矩阵，然后lLinInd是指针索引号
                 // - - - - - - - - - - - - - - - - - - - - - - - - - - - -
                 // Check whether r is already in active list and if the
                 // current cost is lower than the previous
-                lInd = fFindLinInd(pSList, lListInd, lLinInd);
-                if (lInd >= 0) {
+                lInd = fFindLinInd(pSList, lListInd, lLinInd); // 遍历pSList，如果iLinInd存在于pSList则返回1，否则返回-1
+                if (lInd >= 0) {  // 如果在pSList了，则将它取出来更新（并没有丢掉）
                     SR = pSList[lInd];
                     if (flThisG < SR.flG) {
                         SR.flG = flThisG;
                         pSList[lInd] = SR;
                         plPX[lLinInd] = char(SQ.sX - sX);
-                        plPY[lLinInd] = char(SQ.sY - sY);
+                        plPY[lLinInd] = char(SQ.sY - sY); // 这里应该是记录某个像素位置的索引方向
                     }
-                } else {
+                } else { // 否则加入
                     // - - - - - - - - - - - - - - - - - - - - - - - - - -
                     // If r is not in the active list, add it!
                     SR.sX = sX;
@@ -206,15 +207,15 @@ void calcLiveWireGetPath(const cv::Mat &ipx, const cv::Mat &ipy, cv::Point pxy, 
     int iLength = 0;
     iX[iLength] = iXS;
     iY[iLength] = iYS;
-    while ( (ipx.at<char>(iYS, iXS) != 0) || (ipy.at<char>(iYS, iXS) != 0) ) // We're not at the seed
+    while ( (ipx.at<char>(iYS, iXS) != 0) || (ipy.at<char>(iYS, iXS) != 0) ) // We're not at the seed，如果ipx或者ipy有值表示该点具有离种子点最近的路径
     {
         iXS = iXS + ipx.at<char>(iYS, iXS);
-        iYS = iYS + ipy.at<char>(iYS, iXS);
+        iYS = iYS + ipy.at<char>(iYS, iXS); // 开始逆推直到种子点，但是如果本身pxy就已经超出了parRadiusR，那么无法进入该循环
         iLength = iLength + 1;
         iX[iLength] = iXS;
         iY[iLength] = iYS;
     }
-    for(int ii=iLength-2; ii>=0; ii--) {
+    for(int ii=iLength-2; ii>=0; ii--) { // 如果不超过两个点，那么直接返回空
         int tx = iX[ii];
         int ty = iY[ii];
         path.push_back(cv::Point(tx,ty));
@@ -222,7 +223,7 @@ void calcLiveWireGetPath(const cv::Mat &ipx, const cv::Mat &ipy, cv::Point pxy, 
 }
 
 
-cv::Point calcIdealAnchor(const cv::Mat &imgS, cv::Point pxy, int rad) {
+cv::Point calcIdealAnchor(const cv::Mat &imgS, cv::Point pxy, int rad) {  // 找出初始种子点以[-rad, rad]为邻域的区域灰度值最小值点
 //    std::cout << "FUCK" << std::endl;
     int nc = imgS.cols;
     int nr = imgS.rows;
@@ -335,9 +336,9 @@ void OCVLiveWire::calcLWPath(const cv::Point &p, bool isAnchorIdeal) {
         if(isAnchorIdeal) {
             tp = calcIdealAnchor(imgf,p,parRadiusA);
         }
-        double pDST = cv::norm(tp-cPoint);
+        double pDST = cv::norm(tp-cPoint); // cPoint是初始种子点
         bool isNoPath = true;
-        if( (pDST>1.0) && (pDST<parRadiusPath)) {
+        if( (pDST>1.0) && (pDST<parRadiusPath)) { // 如果超出了局部动态规划范围，那么直接返回一个点，让他们连成直线，可是为啥和parRadiusR不一样？
             calcLiveWireGetPath(iPX,iPY, tp, path);
             if(path.size()>0) {
                 isNoPath = false;
